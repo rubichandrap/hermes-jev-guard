@@ -4,7 +4,7 @@ description: Jev (TypeSafe System One) route hints, tool-risk gating, and done-c
 author: Rubi Chandraputra
 license: MIT
 homepage: https://github.com/rubichandrap/hermes-jev-guard
-manifest_version: 2
+# manifest_version omitted: the current Hermes installer caps at 1; the loader parses config_schema either way
 tags: [guardrail, routing, typesafe, jev]
 provides_hooks:
   - pre_llm_call
