@@ -2,8 +2,8 @@
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that puts TypeSafe
 [Jev](https://typesafe.ai) (a System One model) in front of every turn: a plan for how the turn
-runs, a tool-risk gate, a plan gate, and a done-check with a human gate. Stdlib only, fail-open
-by default.
+runs, a tool-risk gate, a plan gate, a done-check with a human gate, and a code-quality gate on
+the files the turn edited. Stdlib only, fail-open by default.
 
 ## The loop
 
@@ -137,6 +137,7 @@ Decision quality, same session set (from `flow_metrics.py` and the session DB):
 | `force_lane` at 0.9 (one-shot block, then release) | engaged with 3/3: one delegation, two refusals with an explicit reason in the answer |
 | Risk gate | 38 scored calls, 0 escalations, 0 blocks, mean risk 0.057 — no real case met yet |
 | Done-check | 3 verdicts, all `complete`; 0 nudges and 0 human gates so far |
+| Code-quality gate | 4 live probes: `refactor=none` at 0.99 confidence on a clean file, `refactor=minor` at 0.42-0.88 on duplicated or tangled files — the unsure branch (hand the decision to the user) fired for real at conf 0.45 |
 | Model tier middleware | not exercised (no tier models configured) |
 
 Reproduce:
