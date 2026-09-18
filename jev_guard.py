@@ -41,7 +41,7 @@ ECONOMY_MODEL = os.environ.get("JEV_ECONOMY_MODEL", "")
 STANDARD_MODEL = os.environ.get("JEV_STANDARD_MODEL", "")
 FRONTIER_MODEL = os.environ.get("JEV_FRONTIER_MODEL", "")
 
-# One JSONL line per Jev call, read by jev_flow_tui.py. Plugin mode overrides this
+# One JSONL line per Jev call; any tail/filter tool can read it. Plugin mode overrides this
 # with ctx.state.data_dir; env JEV_LOG wins for both modes.
 LOG_PATH = os.environ.get("JEV_LOG") or str(
     Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")

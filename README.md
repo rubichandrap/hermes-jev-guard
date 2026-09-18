@@ -5,40 +5,46 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that puts 
 runs, a tool-risk gate, a plan gate, a done-check with a human gate, and a code-quality gate on
 the files the turn edited. Stdlib only, fail-open by default.
 
-## The loop
+## The loop, and when it fires
 
-1. **Plan (`pre_llm_call`)** — Jev reads the user message once and answers four questions: route,
-   complexity, execution **lane**, and **model tier**. The plan is injected as a short block on
-   the user message:
+Each step names its trigger, so a turn that triggers nothing costs nothing. Everything below hangs
+off Hermes hook points (see [Without the plugin](#without-the-plugin) for the shell-hook path).
+
+1. **Plan (`pre_llm_call`)** — fires once per user turn, on any non-empty message, before the model
+   sees it. Jev answers four questions together — route, complexity, execution **lane**, and
+   **model tier** — and the plan is injected as a short block on the user message:
    - lanes: `none` (the running agent does it), `parallel_read` (read-only subagents),
      `worktree_code` (subagents edit code), `review_pass` (a separate verification pass at the end).
    - tiers: `economy` / `standard` / `frontier`.
-2. **Execution** — the agent works the turn with the plan in context. Two plan decisions are
-   enforced, not just suggested:
+2. **Execution** — the agent works the turn with the plan in context. Three plan decisions act here,
+   and none of them is a Jev call of its own:
    - a `delegate_task` call while the plan says `lane=none` is **blocked**;
+   - `force_lane` blocks the first direct tool call of a confident delegating lane, once;
    - the model tier is applied by the `llm_request` middleware when that tier has a model
-     configured (see Settings). Empty tier models leave the model alone.
-3. **Done-check (`pre_verify`)** — after a coding turn, Jev sees the user message, the final
-   response, the changed paths, and the text of the files edited this turn, and picks:
+     configured. Empty tier models leave the model alone.
+3. **Risk gate (`pre_tool_call`)** — fires per tool call, for the tools named in `risk_tools` only
+   (an empty list scores every tool). Jev answers one question — destructive or irreversible? — and
+   the two thresholds decide: at `approve_at` the call is escalated to the human approval prompt, at
+   `block_at` it is blocked, below both it passes. A tool outside the list never reaches Jev.
+4. **Done-check (`pre_verify`)** — fires only on turns where the agent edited files, and only once
+   per turn (one nudge, then it stays quiet). Jev sees the user message, the final response, the
+   changed paths, and the text of the files edited this turn, and picks:
    - `complete` — the turn finishes;
-   - `verify_more` — the agent is sent back to work immediately (one nudge per turn);
+   - `verify_more` — the agent is sent back to work immediately;
    - `ask_human` — the agent is told to stop editing and explain, and the **next**
      `write_file` / `patch` / `delegate_task` is escalated to the real approval prompt, so
      refusing it stops the work. One gate per flagged turn.
-   - a second question rides the same call: `refactor` over `none` / `minor` / `structural`
-     (code-quality gate). `structural` or `minor` with enough confidence sends the agent back
-     to clean the shape up before it stops; below `refactor_at` confidence the plugin refuses
-     to order a refactor and hands the decision to the user instead (approval gate armed).
-     Skipped when no edited file could be read.
-4. **Risk gate (`pre_tool_call`)** — every tool call is scored for destructive or irreversible
-   risk: probability ≥ `approve_at` escalates to human approval, ≥ `block_at` blocks it.
+   - a second question rides the same call: `refactor` over `none` / `minor` / `structural`.
+     `minor` or `structural` at or above `refactor_at` confidence sends the agent back to clean the
+     shape up before it stops; below it the plugin refuses to order a refactor and hands the
+     decision to the user instead (approval gate armed). Skipped when no edited file could be read.
 
-Scope limits worth knowing: the done-check only fires on turns where the agent edited code
-(that is when Hermes runs `pre_verify`), the code it judges is the file text read back from disk
-(clipped to `code_chars`), and the model tier only takes effect when you map tiers
-to models — Hermes has no other per-turn model switch, and a mid-conversation model swap costs
-the prompt cache. Jev returns calibrated probabilities, not truth; tune the thresholds on your
-own traffic.
+Jev fails open: an error or a timeout logs a warning to stderr and the agent proceeds. It returns
+calibrated probabilities, not truth — tune the thresholds on your own traffic.
+
+Two costs worth knowing: the plan block rides every user message (about 99 tokens, absorbed by
+prompt caching), and a model swap mid-conversation breaks the prompt cache, which is why tier
+models are opt-in.
 
 ## Install
 
@@ -158,7 +164,7 @@ speed feature.
 Every Jev call appends one JSONL line to the plugin data dir,
 `$HERMES_HOME/plugin-data/agent-plugin-hermes-jev-guard-<hash>/jev-flow.jsonl`
 (`JEV_LOG` overrides the path): event, latency, state preview, Jev's answers,
-thresholds, error. `jev-flow-tui` (separate local repo) renders it.
+thresholds, error.
 
 ## Without the plugin
 
