@@ -41,9 +41,10 @@ If Jev errors or times out, the hooks fail open: the agent proceeds and a warnin
 
 ## Flow log
 
-Every Jev call appends one JSONL line to
-`$HERMES_HOME/plugin-data/hermes-jev-guard/jev-flow.jsonl` (`JEV_LOG` overrides the path):
-event, latency, state preview, Jev's answers, thresholds, error.
+Every Jev call appends one JSONL line to the plugin data dir,
+`$HERMES_HOME/plugin-data/agent-plugin-hermes-jev-guard-<hash>/jev-flow.jsonl`
+(`JEV_LOG` overrides the path): event, latency, state preview, Jev's answers,
+thresholds, error.
 
 ## Shell-hook mode (alternative, no plugin)
 
