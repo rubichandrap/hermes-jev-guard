@@ -1,0 +1,13 @@
+# Append this to ~/.hermes/config.yaml. Hermes expands ~ in hook commands.
+hooks:
+  pre_llm_call:
+    - command: "python3 ~/hermes-jev-guard/jev_guard.py"
+      timeout: 10
+  pre_tool_call:
+    - matcher: "terminal|write_file|patch"
+      command: "python3 ~/hermes-jev-guard/jev_guard.py"
+      timeout: 10
+      # fail_closed: true  # block the tool call when Jev is unreachable or times out
+  pre_verify:
+    - command: "python3 ~/hermes-jev-guard/jev_guard.py"
+      timeout: 10
