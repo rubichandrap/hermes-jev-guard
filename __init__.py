@@ -42,7 +42,7 @@ def _make_hook(event: str):
 
 
 def register(ctx):
-    """Resolve settings, then register the three hooks."""
+    """Resolve settings, then register the hooks and the model-tier middleware."""
     try:  # profile-scoped flow log; older loaders without ctx.state keep the default path
         log_path = str(ctx.state.data_dir / "jev-flow.jsonl")
     except AttributeError:
@@ -54,6 +54,11 @@ def register(ctx):
         block_at=ctx.get_config("block_at", default=jev_guard.BLOCK_AT),
         verify_at=ctx.get_config("verify_at", default=jev_guard.VERIFY_AT),
         max_state_chars=ctx.get_config("max_state_chars", default=jev_guard.MAX_STATE_CHARS),
+        economy_model=ctx.get_config("economy_model", default=jev_guard.ECONOMY_MODEL),
+        standard_model=ctx.get_config("standard_model", default=jev_guard.STANDARD_MODEL),
+        frontier_model=ctx.get_config("frontier_model", default=jev_guard.FRONTIER_MODEL),
     )
     for event in _EVENTS:
         ctx.register_hook(event, _make_hook(event))
+    # Rewrites the model per request when a tier model is configured; no-op otherwise.
+    ctx.register_middleware("llm_request", jev_guard.on_llm_request)

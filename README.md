@@ -1,16 +1,38 @@
 # hermes-jev-guard
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that puts TypeSafe
-[Jev](https://typesafe.ai) (a System One model) in front of every session: a route hint, a
-tool-risk gate, and a done-check. Stdlib only, fail-open by default.
+[Jev](https://typesafe.ai) (a System One model) in front of every turn: a plan for how the turn
+runs, a tool-risk gate, a plan gate, and a done-check with a human gate. Stdlib only, fail-open
+by default.
 
-- `pre_llm_call` — Jev reads the user message, picks a route and a complexity score; the result is injected as a small hint on the user message.
-- `pre_tool_call` — Jev scores `terminal` / `write_file` / `patch` calls for destructive or irreversible risk; probability ≥ `approve_at` escalates to human approval, ≥ `block_at` blocks the call.
-- `pre_verify` — after a coding turn, Jev checks the final response for overclaiming or unfinished work; a flag sends the agent back to work once.
+## The loop
 
-Soft routing: Hermes has no hook that swaps the model per turn, so the route hint steers the
-running model rather than switching it. Jev returns calibrated probabilities, not truth; tune the
-thresholds on your own traffic.
+1. **Plan (`pre_llm_call`)** — Jev reads the user message once and answers four questions: route,
+   complexity, execution **lane**, and **model tier**. The plan is injected as a short block on
+   the user message:
+   - lanes: `none` (the running agent does it), `parallel_read` (read-only subagents),
+     `worktree_code` (subagents edit code), `review_pass` (a separate verification pass at the end).
+   - tiers: `economy` / `standard` / `frontier`.
+2. **Execution** — the agent works the turn with the plan in context. Two plan decisions are
+   enforced, not just suggested:
+   - a `delegate_task` call while the plan says `lane=none` is **blocked**;
+   - the model tier is applied by the `llm_request` middleware when that tier has a model
+     configured (see Settings). Empty tier models leave the model alone.
+3. **Done-check (`pre_verify`)** — after a coding turn, Jev sees the user message, the final
+   response, and the changed paths, and picks:
+   - `complete` — the turn finishes;
+   - `verify_more` — the agent is sent back to work immediately (one nudge per turn);
+   - `ask_human` — the agent is told to stop editing and explain, and the **next**
+     `write_file` / `patch` / `delegate_task` is escalated to the real approval prompt, so
+     refusing it stops the work. One gate per flagged turn.
+4. **Risk gate (`pre_tool_call`)** — every tool call is scored for destructive or irreversible
+   risk: probability ≥ `approve_at` escalates to human approval, ≥ `block_at` blocks it.
+
+Scope limits worth knowing: the done-check only fires on turns where the agent edited code
+(that is when Hermes runs `pre_verify`), and the model tier only takes effect when you map tiers
+to models — Hermes has no other per-turn model switch, and a mid-conversation model swap costs
+the prompt cache. Jev returns calibrated probabilities, not truth; tune the thresholds on your
+own traffic.
 
 ## Install
 
@@ -36,6 +58,9 @@ environment variables are the fallback defaults.
 | `block_at` | `JEV_BLOCK_AT` | `0.97` | risk probability that blocks the tool call |
 | `verify_at` | `JEV_VERIFY_AT` | `0.7` | done-check probability that nudges the agent to continue |
 | `max_state_chars` | `JEV_MAX_STATE_CHARS` | `12000` | state sent to Jev is clipped to this |
+| `economy_model` | `JEV_ECONOMY_MODEL` | `""` | model id for the economy tier; empty disables the swap |
+| `standard_model` | `JEV_STANDARD_MODEL` | `""` | model id for the standard tier |
+| `frontier_model` | `JEV_FRONTIER_MODEL` | `""` | model id for the frontier tier |
 
 If Jev errors or times out, the hooks fail open: the agent proceeds and a warning is logged.
 
@@ -44,13 +69,14 @@ If Jev errors or times out, the hooks fail open: the agent proceeds and a warnin
 Every Jev call appends one JSONL line to the plugin data dir,
 `$HERMES_HOME/plugin-data/agent-plugin-hermes-jev-guard-<hash>/jev-flow.jsonl`
 (`JEV_LOG` overrides the path): event, latency, state preview, Jev's answers,
-thresholds, error.
+thresholds, error. `jev-flow-tui` (separate local repo) renders it.
 
 ## Shell-hook mode (alternative, no plugin)
 
 `jev_guard.py` also runs standalone. Append the block from
 [hooks.example.yaml](hooks.example.yaml) to `~/.hermes/config.yaml`, then dry-run one event with
-`hermes hooks test pre_tool_call --for-tool terminal`.
+`hermes hooks test pre_tool_call --for-tool terminal`. Standalone mode has no middleware, so the
+model tier is ignored there.
 
 ## Development
 
