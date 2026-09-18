@@ -237,7 +237,8 @@ def on_pre_llm_call(payload: dict, ask=ask) -> dict:
 
     lines = [
         _label(f"Jev plan: lane={lane}", LANES, lane, lane_p),
-        _label(f"model tier: {tier}", TIERS, tier),
+        _label(f"model tier: {tier}", TIERS, tier)
+        + ("" if tier in tier_models() else " (no tier model configured; stay on the current model)"),
         _label(f"route: {route}", ROUTES, route, route_p)
         + (f" Complexity {score:.2f}/2." if isinstance(score, (int, float)) else ""),
         LANE_DIRECTIVES[lane],
@@ -386,6 +387,7 @@ def self_test() -> int:
     hint = on_pre_llm_call({"session_id": "s0", "extra": {"user_message": "design a queue"}},
                            ask=_scripted_ask())["context"]
     assert "lane=none" in hint and "model tier: standard" in hint and "route: deep_reasoning" in hint, hint
+    assert "no tier model configured" in hint, hint  # no swap mapped: tell the model to stay put
     assert "Do not call delegate_task" in hint, hint
     assert on_pre_llm_call({"extra": {"user_message": "  "}}, ask=_scripted_ask()) == {}
 
