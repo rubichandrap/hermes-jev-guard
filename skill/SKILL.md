@@ -36,28 +36,18 @@ If the script is not installed, the hooks file inside the guard repo runs the sa
 
 ## Any other question: the HTTP API
 
-One POST, same endpoint the plugin uses. `TYPESAFE_API_KEY` lives in `$HERMES_HOME/.env`
-(`~/.hermes/.env` by default).
+One POST, same endpoint the plugin uses. The key is already in the environment as
+`TYPESAFE_API_KEY` (Hermes loads it from `$HERMES_HOME/.env` at startup); never print it.
 
 ```bash
-python3 - <<'PY'
-import json, os, re, urllib.request
-from pathlib import Path
-env = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / ".env"
-key = re.search(r"^TYPESAFE_API_KEY\s*=\s*(.+)$", env.read_text(), re.M).group(1).strip().strip('"')
-body = json.dumps({
-    "state": "<the text the judgment is about>",
-    "model": "jev-latest",
-    "questions": {
-        "finished": {"type": "noul",
-                     "instructions": "Does this response overclaim or leave work unfinished?",
-                     "criteria": {"true": "claims unverified results", "false": "claims match the evidence"}},
-    },
-}).encode()
-req = urllib.request.Request("https://api.typesafe.ai/v1/systemone", data=body,
-                             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-print(json.load(urllib.request.urlopen(req, timeout=8)))
-PY
+curl -s https://api.typesafe.ai/v1/systemone \
+  -H "Authorization: Bearer $TYPESAFE_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model": "jev-latest",
+       "state": "<the text the judgment is about>",
+       "questions": {
+         "finished": {"type": "noul",
+                      "instructions": "Does this response overclaim or leave work unfinished?",
+                      "criteria": {"true": "claims unverified results", "false": "claims match the evidence"}}}}'
 ```
 
 Three question types: `choice` (pick one of `criteria`, returns `choice`, `probabilities`,
