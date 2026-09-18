@@ -71,12 +71,19 @@ Every Jev call appends one JSONL line to the plugin data dir,
 (`JEV_LOG` overrides the path): event, latency, state preview, Jev's answers,
 thresholds, error. `jev-flow-tui` (separate local repo) renders it.
 
-## Shell-hook mode (alternative, no plugin)
+## Without the plugin
 
-`jev_guard.py` also runs standalone. Append the block from
-[hooks.example.yaml](hooks.example.yaml) to `~/.hermes/config.yaml`, then dry-run one event with
-`hermes hooks test pre_tool_call --for-tool terminal`. Standalone mode has no middleware, so the
-model tier is ignored there.
+Two ways to keep Jev available when the plugin is off:
+
+- **Automatic (shell hooks)** — `jev_guard.py` also runs standalone: append the block from
+  [hooks.example.yaml](hooks.example.yaml) to `~/.hermes/config.yaml`, then dry-run one event with
+  `hermes hooks test pre_tool_call --for-tool terminal`. Same three hooks, no middleware (so the
+  model tier is ignored), and the plan gate/human gate still work because they are hook logic.
+- **On demand (skill + `--ask`)** — `python3 jev_guard.py --ask "refactor the auth module"` prints
+  the same plan the hook would inject. [skill/SKILL.md](skill/SKILL.md) teaches the agent when to
+  use it and how to call the API for other questions; install it with
+  `hermes skills install https://raw.githubusercontent.com/rubichandrap/hermes-jev-guard/main/skill/SKILL.md`.
+  A skill cannot enforce anything — no blocking, no approval gate — so it is advice, not guardrails.
 
 ## Development
 

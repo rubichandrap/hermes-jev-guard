@@ -379,6 +379,12 @@ def _scripted_ask(route="deep_reasoning", complexity=1.5, risk=0.0,
     return fake
 
 
+def plan_for(text: str, ask=ask) -> str:
+    """One Jev plan for a message; the text the pre_llm_call hook injects (CLI: --ask)."""
+    return on_pre_llm_call({"session_id": "", "extra": {"user_message": text}},
+                           ask=ask).get("context") or "(no plan: Jev returned nothing)"
+
+
 def self_test() -> int:
     configure(approve_at=0.7, block_at=0.97, verify_at=0.7,
               economy_model="", standard_model="", frontier_model="")  # deterministic
@@ -435,6 +441,7 @@ def self_test() -> int:
     configure(frontier_model="")
 
     assert handle({"hook_event_name": "unknown_event"}) == {}
+    assert plan_for("refactor the parser", ask=_scripted_ask(lane="worktree_code")).startswith("Jev plan: lane=worktree_code")
 
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
@@ -453,6 +460,18 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     if "--self-test" in argv:
         return self_test()
+    if "--ask" in argv:
+        text = " ".join(argv[argv.index("--ask") + 1:]).strip() or sys.stdin.read().strip()
+        if not text:
+            print("usage: jev_guard.py --ask 'message'   (or pipe the message on stdin)",
+                  file=sys.stderr)
+            return 2
+        try:
+            print(plan_for(text))
+        except Exception as exc:
+            print(f"jev-guard: ask failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     try:
         payload = json.load(sys.stdin)
     except Exception as exc:
