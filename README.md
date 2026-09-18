@@ -90,7 +90,6 @@ measured from the flow log:
 
 | Cost | Value |
 | --- | --- |
-| Trivial turn (`reply with exactly: ping`), plugin off vs on | 5s vs 7s |
 | Jev round-trip, per call | p50 825ms (`pre_llm_call`), 781ms (`pre_tool_call`), 774ms (`pre_verify`) |
 | Jev time per turn, read-only traffic | 0.88s (one `pre_llm_call`; unscored tools skip Jev entirely) |
 | Jev time per turn, with delegation | 1.6-2.5s (extra scored tool calls) |
