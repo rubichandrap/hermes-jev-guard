@@ -53,6 +53,8 @@ def register(ctx):
         approve_at=ctx.get_config("approve_at", default=jev_guard.APPROVE_AT),
         block_at=ctx.get_config("block_at", default=jev_guard.BLOCK_AT),
         verify_at=ctx.get_config("verify_at", default=jev_guard.VERIFY_AT),
+        refactor_at=ctx.get_config("refactor_at", default=jev_guard.REFACTOR_AT),
+        code_chars=ctx.get_config("code_chars", default=jev_guard.CODE_CHARS),
         max_state_chars=ctx.get_config("max_state_chars", default=jev_guard.MAX_STATE_CHARS),
         economy_model=ctx.get_config("economy_model", default=jev_guard.ECONOMY_MODEL),
         standard_model=ctx.get_config("standard_model", default=jev_guard.STANDARD_MODEL),

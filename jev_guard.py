@@ -30,6 +30,11 @@ BLOCK_AT = float(os.environ.get("JEV_BLOCK_AT", "0.97"))
 VERIFY_AT = float(os.environ.get("JEV_VERIFY_AT", "0.7"))
 MAX_STATE_CHARS = int(os.environ.get("JEV_MAX_STATE_CHARS", "12000"))
 
+# Code-quality gate: the files edited this turn are read back and judged for a refactor
+# need. Below REFACTOR_AT the plugin does not act on its own: it hands the call to the user.
+REFACTOR_AT = float(os.environ.get("JEV_REFACTOR_AT", "0.7"))
+CODE_CHARS = int(os.environ.get("JEV_CODE_CHARS", "8000"))
+
 # Model tier -> model id for the llm_request middleware. Empty means "leave the model
 # alone": the middleware only rewrites a request when that tier has a model configured.
 ECONOMY_MODEL = os.environ.get("JEV_ECONOMY_MODEL", "")
@@ -43,8 +48,8 @@ LOG_PATH = os.environ.get("JEV_LOG") or str(
     / "plugin-data" / "hermes-jev-guard" / "jev-flow.jsonl")
 
 _SETTING_NAMES = ("timeout", "approve_at", "block_at", "verify_at", "max_state_chars",
-                  "log_path", "economy_model", "standard_model", "frontier_model", "risk_tools",
-                  "force_lane")
+                  "refactor_at", "code_chars", "log_path", "economy_model", "standard_model",
+                  "frontier_model", "risk_tools", "force_lane")
 
 
 def configure(**overrides) -> None:
@@ -84,6 +89,13 @@ VERDICTS = {
     "complete": "claims match the evidence shown; the work looks finished",
     "verify_more": "work unfinished, unverified, or overclaimed; the agent can continue on its own",
     "ask_human": "more changes are needed and the user must approve them before anything else is edited",
+}
+
+# Code-quality verdict over the files edited this turn, asked only when code text was read.
+REFACTORS = {
+    "none": "leave it: the change is clean enough, or this is a throwaway/one-off",
+    "minor": "small cleanup now: naming, duplication, dead code, a missing error path",
+    "structural": "real refactor: wrong shape or tangled responsibilities that the next change will fight",
 }
 
 LANE_DIRECTIVES = {
@@ -197,6 +209,28 @@ def ask(state, questions: dict, event: str = "", session: str = "") -> dict:
 def clip(obj, limit: int | None = None) -> str:
     text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
     return text[: limit or MAX_STATE_CHARS]
+
+
+def _changed_code(paths, limit: int | None = None) -> str:
+    """Text of the files edited this turn, clipped to `limit` chars in total.
+
+    Unreadable entries (deleted, binary, permission) are skipped: the quality question is
+    asked only when there is code to judge. Paths resolve against the process cwd, which is
+    the session cwd for in-process plugin hooks.
+    """
+    budget = limit or CODE_CHARS
+    parts = []
+    for raw in paths or []:
+        if budget <= 0:
+            break
+        try:
+            text = Path(raw).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        chunk = f"--- {raw}\n{text[:budget]}"
+        parts.append(chunk)
+        budget -= len(chunk)
+    return "\n".join(parts)
 
 
 def _event_field(payload: dict, name: str, default=None):
@@ -329,10 +363,12 @@ def on_pre_verify(payload: dict, ask=ask) -> dict:
     if not response:
         return {}
     session = _session(payload)
+    changed = _event_field(payload, "changed_paths") or []
+    code = _changed_code(changed)
     state = {"user_message": _plan(session).get("user_message", ""),
              "final_response": response,
-             "changed_paths": _event_field(payload, "changed_paths") or []}
-    verdict = ask(clip(state), {
+             "changed_paths": changed}
+    questions = {
         "verdict": {
             "type": "choice",
             "instructions": "The agent is about to finish. Is this turn's work complete, or does "
@@ -340,9 +376,23 @@ def on_pre_verify(payload: dict, ask=ask) -> dict:
                             "its own, or must the user approve further changes first?",
             "criteria": VERDICTS,
         },
-    }, "pre_verify", session)["verdict"]
+    }
+    if code:
+        state["changed_code"] = code
+        questions["refactor"] = {
+            "type": "choice",
+            "instructions": "Judge the edited code itself, not the summary: should it be "
+                            "refactored before the turn stops?",
+            "criteria": REFACTORS,
+        }
+    answers = ask(clip(state), questions, "pre_verify", session)
+    verdict = answers["verdict"]
     chosen = verdict.get("choice", "")
-    if chosen == "ask_human":
+    refactor, refactor_p = _pick(answers, "refactor")
+    refactor_conf = (answers.get("refactor") or {}).get("confidence")
+    quality = (chosen == "complete" and bool(code) and refactor in ("minor", "structural"))
+    unsure = isinstance(refactor_conf, (int, float)) and refactor_conf < REFACTOR_AT
+    if chosen == "ask_human" or (quality and unsure):
         _remember(session, pending_human_gate=True)  # arms the tool-level approval gate
     if int(_event_field(payload, "attempt") or 0) >= 1:
         return {}  # one nudge per turn; Hermes caps nudges at max_verify_nudges anyway
@@ -355,6 +405,17 @@ def on_pre_verify(payload: dict, ask=ask) -> dict:
         return {"action": "continue",
                 "message": "Jev done-check flagged this (fix it now, do not ask). Show real "
                            "evidence for each claim, or finish the remaining work before stopping."}
+    if quality:
+        label = _label(f"Jev code-quality check: refactor={refactor}", REFACTORS, refactor, refactor_p)
+        if unsure:
+            return {"action": "continue",
+                    "message": f"{label} — Jev is not confident ({refactor_conf:.2f} < "
+                               f"{REFACTOR_AT:.2f}), so do not start the refactor on your own: tell "
+                               "the user what should change and why, then let them decide; any "
+                               "further edit or delegation now hits the approval gate."}
+        return {"action": "continue",
+                "message": f"{label}. Refactor it now, or say explicitly why the current shape "
+                           "is right for the next change."}
     return {}
 
 
@@ -394,7 +455,8 @@ def handle(payload: dict) -> dict:
 
 
 def _scripted_ask(route="deep_reasoning", complexity=1.5, risk=0.0,
-                  lane="none", tier="standard", verdict="complete"):
+                  lane="none", tier="standard", verdict="complete",
+                  refactor="none", refactor_confidence=0.8):
     """Deterministic stand-in for ask() so the decision logic is testable offline."""
     def fake(state, questions, event=None, session=None):
         out = {}
@@ -414,6 +476,10 @@ def _scripted_ask(route="deep_reasoning", complexity=1.5, risk=0.0,
         if "verdict" in questions:
             out["verdict"] = {"type": "choice", "choice": verdict,
                               "probabilities": {verdict: 0.85}, "confidence": 0.85}
+        if "refactor" in questions:
+            out["refactor"] = {"type": "choice", "choice": refactor,
+                               "probabilities": {refactor: refactor_confidence},
+                               "confidence": refactor_confidence}
         return out
     return fake
 
@@ -425,7 +491,7 @@ def plan_for(text: str, ask=ask) -> str:
 
 
 def self_test() -> int:
-    configure(approve_at=0.7, block_at=0.97, verify_at=0.7,
+    configure(approve_at=0.7, block_at=0.97, verify_at=0.7, refactor_at=0.7, code_chars=8000,
               economy_model="", standard_model="", frontier_model="", risk_tools="",
               force_lane="")  # deterministic
     _STATE.clear()
@@ -496,6 +562,55 @@ def self_test() -> int:
     assert on_pre_verify({**verify_payload,
                           "extra": {**verify_payload["extra"], "attempt": 1}},
                          ask=_scripted_ask(verdict="ask_human")) == {}
+
+    # code-quality gate: reads the edited files, asks for a refactor verdict on the code
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "sloppy.py"
+        src.write_text("def load(p):\n    try:\n        return json.loads(open(p).read())\n"
+                       "    except:\n        pass\n", encoding="utf-8")
+        q_payload = {"session_id": "s7", "extra": {"final_response": "Done.",
+                                                   "changed_paths": [str(src)]}}
+        seen = {}
+
+        def _recorder(state, questions, event=None, session=None, _seen=seen):
+            _seen["state"], _seen["questions"] = state, questions
+            return _scripted_ask(verdict="complete", refactor="structural",
+                                 refactor_confidence=0.9)(state, questions, event, session)
+
+        on_pre_llm_call({"session_id": "s7", "extra": {"user_message": "add a loader"}},
+                        ask=_scripted_ask())
+        nudge = on_pre_verify(q_payload, ask=_recorder)
+        assert "refactor" in seen["questions"] and "changed_code" in seen["state"], seen
+        assert nudge["action"] == "continue" and "Refactor it now" in nudge["message"], nudge
+
+        # below the confidence bar: never refactor on Jev's say-so, hand it to the user
+        unsure = on_pre_verify(q_payload, ask=_scripted_ask(verdict="complete", refactor="minor",
+                                                            refactor_confidence=0.4))
+        assert "let them decide" in unsure["message"] and "0.40" in unsure["message"], unsure
+        assert on_pre_tool_call({"session_id": "s7", "tool_name": "patch"},
+                                ask=_scripted_ask())["action"] == "approve"
+
+        # the edited file is gone: nothing to judge, no quality question, no nudge
+        quiet = on_pre_verify({**q_payload,
+                               "extra": {**q_payload["extra"],
+                                         "changed_paths": [str(Path(tmp) / "gone.py")]}},
+                              ask=_recorder)
+        assert quiet == {} and "refactor" not in seen["questions"], seen
+        assert "changed_code" not in seen["state"], seen
+
+        # a clean change scores none: the done-check still owns the turn
+        clean = Path(tmp) / "clean.py"
+        clean.write_text("def double(x):\n    return x * 2\n", encoding="utf-8")
+
+        def _clean_recorder(state, questions, event=None, session=None, _seen=seen):
+            _seen["state"], _seen["questions"] = state, questions
+            return _scripted_ask(verdict="complete", refactor="none")(state, questions, event, session)
+
+        assert on_pre_verify({**q_payload,
+                              "extra": {**q_payload["extra"], "changed_paths": [str(clean)]}},
+                             ask=_clean_recorder) == {}
+        assert "refactor" in seen["questions"], seen
 
     # model tier middleware: no-op without a map, rewrites with one
     assert on_llm_request(request={"model": "x"}, session_id="s1") is None

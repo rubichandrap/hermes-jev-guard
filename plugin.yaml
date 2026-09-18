@@ -1,6 +1,6 @@
 name: hermes-jev-guard
-version: 0.3.0
-description: Jev (TypeSafe System One) plans each turn, gates tool risk, and human-gates refactors
+version: 0.4.0
+description: Jev (TypeSafe System One) plans each turn, gates tool risk, done-checks with a code-quality gate, and human-gates refactors
 author: Rubi Chandraputra
 license: MIT
 homepage: https://github.com/rubichandrap/hermes-jev-guard
@@ -20,6 +20,8 @@ config_schema:
   approve_at: {type: float, default: 0.7, description: Risk probability that escalates a tool call to human approval}
   block_at: {type: float, default: 0.97, description: Risk probability that blocks a tool call}
   verify_at: {type: float, default: 0.7, description: Done-check probability that nudges the agent to continue}
+  refactor_at: {type: float, default: 0.7, description: Confidence the code-quality gate needs to order a refactor; below it the user decides}
+  code_chars: {type: int, default: 8000, description: Edited-file text sent with the done-check, in characters}
   max_state_chars: {type: int, default: 12000, description: State sent to Jev is clipped to this many characters}
   economy_model: {type: str, default: "", description: Model id to use when Jev pitches the economy tier; empty disables the swap}
   standard_model: {type: str, default: "", description: Model id to use when Jev pitches the standard tier; empty disables the swap}

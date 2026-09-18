@@ -19,17 +19,23 @@ by default.
    - the model tier is applied by the `llm_request` middleware when that tier has a model
      configured (see Settings). Empty tier models leave the model alone.
 3. **Done-check (`pre_verify`)** — after a coding turn, Jev sees the user message, the final
-   response, and the changed paths, and picks:
+   response, the changed paths, and the text of the files edited this turn, and picks:
    - `complete` — the turn finishes;
    - `verify_more` — the agent is sent back to work immediately (one nudge per turn);
    - `ask_human` — the agent is told to stop editing and explain, and the **next**
      `write_file` / `patch` / `delegate_task` is escalated to the real approval prompt, so
      refusing it stops the work. One gate per flagged turn.
+   - a second question rides the same call: `refactor` over `none` / `minor` / `structural`
+     (code-quality gate). `structural` or `minor` with enough confidence sends the agent back
+     to clean the shape up before it stops; below `refactor_at` confidence the plugin refuses
+     to order a refactor and hands the decision to the user instead (approval gate armed).
+     Skipped when no edited file could be read.
 4. **Risk gate (`pre_tool_call`)** — every tool call is scored for destructive or irreversible
    risk: probability ≥ `approve_at` escalates to human approval, ≥ `block_at` blocks it.
 
 Scope limits worth knowing: the done-check only fires on turns where the agent edited code
-(that is when Hermes runs `pre_verify`), and the model tier only takes effect when you map tiers
+(that is when Hermes runs `pre_verify`), the code it judges is the file text read back from disk
+(clipped to `code_chars`), and the model tier only takes effect when you map tiers
 to models — Hermes has no other per-turn model switch, and a mid-conversation model swap costs
 the prompt cache. Jev returns calibrated probabilities, not truth; tune the thresholds on your
 own traffic.
@@ -43,8 +49,9 @@ hermes plugins install rubichandrap/hermes-jev-guard
 Install prompts to enable the plugin and to store `TYPESAFE_API_KEY` in `~/.hermes/.env` when it
 is missing. `/plugins` shows it loaded; the hooks fire from then on.
 
-Payload text (user messages, tool inputs, final responses) is sent to `api.typesafe.ai` — enable
-this only on sessions whose content may leave the machine.
+Payload text (user messages, tool inputs, final responses, and the text of files edited during a
+turn) is sent to `api.typesafe.ai` — enable this only on sessions whose content may leave the
+machine.
 
 ## Settings
 
@@ -57,6 +64,8 @@ environment variables are the fallback defaults.
 | `approve_at` | `JEV_APPROVE_AT` | `0.7` | risk probability that escalates to human approval |
 | `block_at` | `JEV_BLOCK_AT` | `0.97` | risk probability that blocks the tool call |
 | `verify_at` | `JEV_VERIFY_AT` | `0.7` | done-check probability that nudges the agent to continue |
+| `refactor_at` | `JEV_REFACTOR_AT` | `0.7` | confidence the code-quality gate needs to order a refactor; below it the user decides |
+| `code_chars` | `JEV_CODE_CHARS` | `8000` | edited-file text sent with the done-check, in characters |
 | `max_state_chars` | `JEV_MAX_STATE_CHARS` | `12000` | state sent to Jev is clipped to this |
 | `economy_model` | `JEV_ECONOMY_MODEL` | `""` | model id for the economy tier; empty disables the swap |
 | `standard_model` | `JEV_STANDARD_MODEL` | `""` | model id for the standard tier |
