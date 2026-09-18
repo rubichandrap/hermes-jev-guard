@@ -66,6 +66,71 @@ environment variables are the fallback defaults.
 
 If Jev errors or times out, the hooks fail open: the agent proceeds and a warning is logged.
 
+## Measurements
+
+Measured on 2026-09-18, one machine, one model (`deepseek/deepseek-v4.1-flash` via commandcode),
+Hermes CLI, plugin versus `hermes plugins disable hermes-jev-guard`. Single-turn prompts, no
+caching warmup control, n is small — treat these as orders of magnitude, not precise deltas.
+
+Prompt used for the timed runs (identical both arms):
+
+> Research three things, in parallel if you can: (a) what TypeSafe System One is, (b) what the
+> Jev model is, (c) what RLCD training is. One line each.
+
+| Run | Duration | Tool calls | Input tokens | Output tokens |
+| --- | --- | --- | --- | --- |
+| plugin off #1 | 15.7s | 7 | 13,078 | 1,218 |
+| plugin off #2 | 11.8s | 6 | 11,089 | 900 |
+| plugin off #3 | 15.1s | 6 | 14,570 | 1,596 |
+| plugin on #1 | 123.0s | 8 (+1 delegated child) | 16,481 | 14,971 |
+| plugin on #2 | 29.0s | 8 | 16,253 | 3,376 |
+| plugin on #3 | 35.1s | 8 | 16,255 | 4,725 |
+| plugin on #4 | 52.2s | 4 (+1 delegated child) | 3,529 | 2,435 |
+
+Wall clock, plugin off: median 15s. Plugin on: median 44s — but most of that gap is the plan
+*changing the work*, not the plugin's own latency: the two slow runs are the ones where the
+enforced lane pushed the turn into `delegate_task`. The plugin's own cost per turn, measured from
+the flow log:
+
+| Cost | Value |
+| --- | --- |
+| Trivial turn (`reply with exactly: ping`), plugin off vs on | 5s vs 7s |
+| Jev round-trip, per call | p50 825ms (`pre_llm_call`), 781ms (`pre_tool_call`), 774ms (`pre_verify`) |
+| Jev time per turn, read-only traffic | 0.88s (one `pre_llm_call`; unscored tools skip Jev entirely) |
+| Jev time per turn, with delegation | 1.6-2.5s (extra scored tool calls) |
+| Share of wall clock, read-only batch (3 turns) | 2.9% |
+| Share of wall clock before `risk_tools` scoping (7 turns, all tools scored) | 17.9% |
+| Plan text added to each user message | 396 chars, about 99 tokens |
+| Jev input tokens per turn | 37 (trivial) to 1,232 (delegation turn) |
+| Jev USD per turn at $0.042/Mtok | $0.000002 - $0.000052 |
+
+So: pennies per thousand turns on Jev, one extra ~0.8s at the start of a turn, and a plan block of
+about 99 prompt tokens that prompt caching absorbs.
+
+Decision quality, same session set (from `flow_metrics.py` and the session DB):
+
+| Component | Observed |
+| --- | --- |
+| `delegate_task` on `lane=none` | blocked on the first attempt (1/1) |
+| Advisory `lane` hint, delegating lane | acted on 0/4 times — the model read the plan and did the work itself |
+| `force_lane` at 0.9 (one-shot block, then release) | engaged with 3/3: one delegation, two refusals with an explicit reason in the answer |
+| Risk gate | 38 scored calls, 0 escalations, 0 blocks, mean risk 0.057 — no real case met yet |
+| Done-check | 3 verdicts, all `complete`; 0 nudges and 0 human gates so far |
+| Model tier middleware | not exercised (no tier models configured) |
+
+Reproduce:
+
+```bash
+python3 flow_metrics.py              # latency, plan/gate distributions, per-turn timeline
+hermes plugins disable hermes-jev-guard && hermes chat -q "<prompt>"   # the off arm
+hermes plugins enable hermes-jev-guard && hermes chat -q "<prompt>"    # the on arm
+```
+
+Known limits: the prompts are ours, the model is one of many, and the delegating runs reward
+looking at the answer rather than the clock — a forced delegation cost ~4x wall clock for an answer
+of comparable quality, so treat `force_lane` as a way to make the plan *considered*, not as a
+speed feature.
+
 ## Flow log
 
 Every Jev call appends one JSONL line to the plugin data dir,
