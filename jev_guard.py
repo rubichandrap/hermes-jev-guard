@@ -130,7 +130,8 @@ def api_key() -> str:
     raise RuntimeError("TYPESAFE_API_KEY not found in the environment or $HERMES_HOME/.env")
 
 
-def log_call(event: str, ms: float, ok: bool, state=None, answers=None, error=None) -> None:
+def log_call(event: str, ms: float, ok: bool, state=None, answers=None, error=None,
+             session: str = "") -> None:
     """Append one JSONL record to LOG_PATH. Never raises: the hook must not wedge.
 
     ponytail: plain append, no rotation - one line per Jev call; rotate when the file
@@ -140,7 +141,7 @@ def log_call(event: str, ms: float, ok: bool, state=None, answers=None, error=No
         path = Path(LOG_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         record = {
-            "ts": time.time(), "event": event, "ms": round(ms, 1), "ok": ok,
+            "ts": time.time(), "event": event, "ms": round(ms, 1), "ok": ok, "session": session,
             "state_chars": len(state or ""), "state_head": (state or "")[:200],
             "answers": answers, "error": error,
             "thresholds": {"approve_at": APPROVE_AT, "block_at": BLOCK_AT, "verify_at": VERIFY_AT},
@@ -151,7 +152,7 @@ def log_call(event: str, ms: float, ok: bool, state=None, answers=None, error=No
         pass
 
 
-def ask(state, questions: dict, event: str = "") -> dict:
+def ask(state, questions: dict, event: str = "", session: str = "") -> dict:
     """POST one question set to Jev; log the call whether it succeeds or fails."""
     body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode("utf-8")
     req = urllib.request.Request(
@@ -163,9 +164,10 @@ def ask(state, questions: dict, event: str = "") -> dict:
             answers = json.loads(resp.read().decode("utf-8"))["answers"]
     except Exception as exc:
         log_call(event, (time.monotonic() - started) * 1000, False, state,
-                 error=f"{type(exc).__name__}: {exc}")
+                 error=f"{type(exc).__name__}: {exc}", session=session)
         raise
-    log_call(event, (time.monotonic() - started) * 1000, True, state, answers=answers)
+    log_call(event, (time.monotonic() - started) * 1000, True, state, answers=answers,
+             session=session)
     return answers
 
 
@@ -226,7 +228,7 @@ def on_pre_llm_call(payload: dict, ask=ask) -> dict:
             "instructions": "Which model class fits this request?",
             "criteria": TIERS,
         },
-    }, "pre_llm_call")
+    }, "pre_llm_call", _session(payload))
     lane, lane_p = _pick(answers, "lane")
     tier, _ = _pick(answers, "tier")
     route, route_p = _pick(answers, "route")
@@ -275,7 +277,7 @@ def on_pre_tool_call(payload: dict, ask=ask) -> dict:
                 "false": "read-only, additive, or easily reversible",
             },
         },
-    }, "pre_tool_call")["risk"]["noul"]
+    }, "pre_tool_call", session)["risk"]["noul"]
     if risk >= BLOCK_AT:
         return {"action": "block",
                 "message": f"Jev risk {risk:.2f}: blocked; rewrite as a safer, reversible step."}
@@ -301,7 +303,7 @@ def on_pre_verify(payload: dict, ask=ask) -> dict:
                             "its own, or must the user approve further changes first?",
             "criteria": VERDICTS,
         },
-    }, "pre_verify")["verdict"]
+    }, "pre_verify", session)["verdict"]
     chosen = verdict.get("choice", "")
     if chosen == "ask_human":
         _remember(session, pending_human_gate=True)  # arms the tool-level approval gate
@@ -357,7 +359,7 @@ def handle(payload: dict) -> dict:
 def _scripted_ask(route="deep_reasoning", complexity=1.5, risk=0.0,
                   lane="none", tier="standard", verdict="complete"):
     """Deterministic stand-in for ask() so the decision logic is testable offline."""
-    def fake(state, questions, event=None):
+    def fake(state, questions, event=None, session=None):
         out = {}
         if "route" in questions:
             out["route"] = {"type": "choice", "choice": route,
