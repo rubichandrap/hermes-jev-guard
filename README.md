@@ -77,12 +77,29 @@ Prompts, identical text in both arms:
 - `Research three things, in parallel if you can: (a) what TypeSafe System One is, (b) what the Jev model is, (c) what RLCD training is. One line each.`
 - `Create sorter.py in this directory with a function that sorts a list of integers, then run it once with a sample list and show the output.`
 - `reply with exactly: ping`
+- `Fix calc.py so divide() handles zero, then confirm the test suite passes.`
+- `Add a median() function to /tmp/jev-hard/on/calc.py. Handle empty lists and even-length lists correctly, then verify it.` (the off arm gets its own path; everything else is identical)
 
 | Task (runs: off / on) | Plugin off | Plugin on |
 | --- | --- | --- |
 | Research three things (3 / 4) | 15s median, 12-16s range; 5 tool calls; in ~13k, out 0.9-1.6k | 44s median, 29-123s range; 6 tool calls; in ~16k, out 3.4-15k; delegation ran in 2 of 4 |
 | Create sorter.py, run it, show output (1 / 1) | 12s; 2 tool calls | 18s; 3 tool calls |
 | Reply with exactly: `ping` (1 / 1) | 4s; 0 tool calls | 6s; 0 tool calls |
+| Fix `divide()` to handle zero, confirm the suite passes (1 / 1) | 2m27s; 41 tool calls; artifact correct | 1m11s; 23 tool calls; artifact correct |
+| Add `median()` handling empty and even-length lists (1 / 1) | 48s; 13 tool calls; artifact correct | 30s; 5 tool calls; artifact correct |
+
+The two artifact rows are the accuracy check: after each turn we imported the written file and ran
+our own cases (`median([1,2,3]) == 2`, `[1,2,3,4] == 2.5`, `[5] == 5`, unsorted input, empty list
+raises). Both arms passed both tasks, and both claimed verification they had actually performed, so
+at this size the plugin bought an equal answer for fewer tool calls, not a more accurate one. Jev's
+risk scores on that work stayed at 0.01-0.17, and the done-check returned `complete` both times —
+correctly, since the code had been run.
+
+Worth knowing before designing more tests: `hermes chat -q` has no user to approve anything, so
+Hermes itself blocks commands its own scanner calls dangerous. The risk gate and the human gate can
+only be exercised in an interactive session (or by pointing the prompt at something Hermes leaves
+alone), and a prompt with a path spelled out is required — a relative "calc.py" can resolve to the
+agent's own working directory instead of the shell's.
 
 The research gap is mostly the plan *changing the work*, not plugin latency — the slow runs are the
 ones where the enforced lane pushed the turn into `delegate_task`. The plugin's own cost per turn,
