@@ -28,6 +28,20 @@ BLOCK_AT = float(os.environ.get("JEV_BLOCK_AT", "0.97"))
 VERIFY_AT = float(os.environ.get("JEV_VERIFY_AT", "0.7"))
 MAX_STATE_CHARS = int(os.environ.get("JEV_MAX_STATE_CHARS", "12000"))
 
+_SETTING_NAMES = ("timeout", "approve_at", "block_at", "verify_at", "max_state_chars")
+
+
+def configure(**overrides) -> None:
+    """Override module defaults; the plugin resolves these from config.yaml.
+
+    Env vars above stay the standalone default. Unknown keys are ignored.
+    """
+    for name, value in overrides.items():
+        if name in _SETTING_NAMES and value is not None:
+            current = globals()[name.upper()]
+            globals()[name.upper()] = type(current)(value)
+
+
 ROUTES = {
     "direct_answer": "simple or factual request; answer directly",
     "deep_reasoning": "design, architecture, or multi-step reasoning request",
@@ -182,6 +196,7 @@ def _scripted_ask(route="deep_reasoning", complexity=1.5, risk=0.0, unfinished=0
 
 
 def self_test() -> int:
+    configure(approve_at=0.7, block_at=0.97, verify_at=0.7)  # deterministic regardless of env
     hint = on_pre_llm_call({"extra": {"user_message": "help me design a queue"}},
                            ask=_scripted_ask())["context"]
     assert "deep_reasoning" in hint and "Complexity 1.50/2" in hint, hint

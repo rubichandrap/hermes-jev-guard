@@ -1,0 +1,23 @@
+name: hermes-jev-guard
+version: 0.2.0
+description: Jev (TypeSafe System One) route hints, tool-risk gating, and done-checks
+author: Rubi Chandraputra
+license: MIT
+homepage: https://github.com/rubichandrap/hermes-jev-guard
+manifest_version: 2
+tags: [guardrail, routing, typesafe, jev]
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - pre_verify
+requires_env:
+  - name: TYPESAFE_API_KEY
+    description: TypeSafe API key for Jev (System One)
+    url: https://typesafe.ai
+    secret: true
+config_schema:
+  timeout: {type: float, default: 8, description: HTTP timeout in seconds for Jev calls}
+  approve_at: {type: float, default: 0.7, description: Risk probability that escalates a tool call to human approval}
+  block_at: {type: float, default: 0.97, description: Risk probability that blocks a tool call}
+  verify_at: {type: float, default: 0.7, description: Done-check probability that nudges the agent to continue}
+  max_state_chars: {type: int, default: 12000, description: State sent to Jev is clipped to this many characters}

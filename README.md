@@ -1,56 +1,58 @@
 # hermes-jev-guard
 
-Shell hooks that put TypeSafe [Jev](https://typesafe.ai) (a System One model) in front of a
-[Hermes Agent](https://github.com/NousResearch/hermes-agent) session: a route hint, a tool-risk
-gate, and a done-check. One stdlib-only script, fail-open by default.
+A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that puts TypeSafe
+[Jev](https://typesafe.ai) (a System One model) in front of every session: a route hint, a
+tool-risk gate, and a done-check. Stdlib only, fail-open by default.
 
 - `pre_llm_call` — Jev reads the user message, picks a route and a complexity score; the result is injected as a small hint on the user message.
-- `pre_tool_call` — Jev scores `terminal` / `write_file` / `patch` calls for destructive or irreversible risk; high risk escalates to human approval, extreme risk blocks the call.
+- `pre_tool_call` — Jev scores `terminal` / `write_file` / `patch` calls for destructive or irreversible risk; probability ≥ `approve_at` escalates to human approval, ≥ `block_at` blocks the call.
 - `pre_verify` — after a coding turn, Jev checks the final response for overclaiming or unfinished work; a flag sends the agent back to work once.
 
-This is soft routing: Hermes has no hook that swaps the model per turn, so the route hint steers
-the running model rather than switching it. Jev returns calibrated probabilities, not truth;
-tune the thresholds on your own traffic.
+Soft routing: Hermes has no hook that swaps the model per turn, so the route hint steers the
+running model rather than switching it. Jev returns calibrated probabilities, not truth; tune the
+thresholds on your own traffic.
 
 ## Install
 
-1. Clone anywhere:
+```bash
+hermes plugins install rubichandrap/hermes-jev-guard
+```
 
-   ```bash
-   git clone https://github.com/rubichandrap/hermes-jev-guard ~/hermes-jev-guard
-   ```
+Install prompts to enable the plugin and to store `TYPESAFE_API_KEY` in `~/.hermes/.env` when it
+is missing. `/plugins` shows it loaded; the hooks fire from then on.
 
-2. Put `TYPESAFE_API_KEY=...` in `~/.hermes/.env` (or export it), then check the script:
+Payload text (user messages, tool inputs, final responses) is sent to `api.typesafe.ai` — enable
+this only on sessions whose content may leave the machine.
 
-   ```bash
-   python3 ~/hermes-jev-guard/jev_guard.py --self-test   # offline logic check
-   ```
+## Settings
 
-3. Append the block from [hooks.example.yaml](hooks.example.yaml) to `~/.hermes/config.yaml`.
-   The first firing asks for hook consent; `HERMES_ACCEPT_HOOKS=1` or `hooks_auto_accept: true`
-   skips the prompt.
+Stored under `plugins.entries.hermes-jev-guard.settings` in `config.yaml`; the matching `JEV_*`
+environment variables are the fallback defaults.
 
-4. Dry-run one event:
+| Setting | Env fallback | Default | Meaning |
+| --- | --- | --- | --- |
+| `timeout` | `JEV_TIMEOUT` | `8` | HTTP timeout, seconds |
+| `approve_at` | `JEV_APPROVE_AT` | `0.7` | risk probability that escalates to human approval |
+| `block_at` | `JEV_BLOCK_AT` | `0.97` | risk probability that blocks the tool call |
+| `verify_at` | `JEV_VERIFY_AT` | `0.7` | done-check probability that nudges the agent to continue |
+| `max_state_chars` | `JEV_MAX_STATE_CHARS` | `12000` | state sent to Jev is clipped to this |
 
-   ```bash
-   hermes hooks test pre_tool_call --for-tool terminal
-   ```
+If Jev errors or times out, the hooks fail open: the agent proceeds and a warning is logged.
 
-## Knobs (environment)
+## Shell-hook mode (alternative, no plugin)
 
-| Var | Default | Meaning |
-| --- | --- | --- |
-| `JEV_TIMEOUT` | `8` | HTTP timeout, seconds |
-| `JEV_APPROVE_AT` | `0.7` | risk probability that escalates to human approval |
-| `JEV_BLOCK_AT` | `0.97` | risk probability that blocks the tool call |
-| `JEV_VERIFY_AT` | `0.7` | done-check probability that nudges the agent to continue |
-| `JEV_MAX_STATE_CHARS` | `12000` | state sent to Jev is clipped to this |
+`jev_guard.py` also runs standalone. Append the block from
+[hooks.example.yaml](hooks.example.yaml) to `~/.hermes/config.yaml`, then dry-run one event with
+`hermes hooks test pre_tool_call --for-tool terminal`.
 
-## Notes
+## Development
 
-- Fail-open: if Jev errors or times out, the agent proceeds and the hook logs to stderr. For the
-  tool gate you can opt into `fail_closed: true` in config.
-- Payload text (user messages, tool inputs, final responses) is sent to `api.typesafe.ai`.
-- Model `jev-latest` (currently `jev-1.13.0`). Pricing and limits: <https://docs.typesafe.ai/models>.
+```bash
+python3 jev_guard.py --self-test   # offline logic check, no network
+hermes plugins doctor . --ci       # manifest + register(ctx) + hook registry
+```
+
+Model `jev-latest` (currently `jev-1.13.0`). Pricing and limits:
+<https://docs.typesafe.ai/models>.
 
 MIT
