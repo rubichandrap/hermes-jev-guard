@@ -72,25 +72,21 @@ Measured on 2026-09-18, one machine, one model (`deepseek/deepseek-v4.1-flash` v
 Hermes CLI, plugin versus `hermes plugins disable hermes-jev-guard`. Single-turn prompts, no
 caching warmup control, n is small — treat these as orders of magnitude, not precise deltas.
 
-Prompt used for the timed runs (identical both arms):
+Prompts, identical text in both arms:
 
-> Research three things, in parallel if you can: (a) what TypeSafe System One is, (b) what the
-> Jev model is, (c) what RLCD training is. One line each.
+- `Research three things, in parallel if you can: (a) what TypeSafe System One is, (b) what the Jev model is, (c) what RLCD training is. One line each.`
+- `Create sorter.py in this directory with a function that sorts a list of integers, then run it once with a sample list and show the output.`
+- `reply with exactly: ping`
 
-| Run | Duration | Tool calls | Input tokens | Output tokens |
-| --- | --- | --- | --- | --- |
-| plugin off #1 | 15.7s | 7 | 13,078 | 1,218 |
-| plugin off #2 | 11.8s | 6 | 11,089 | 900 |
-| plugin off #3 | 15.1s | 6 | 14,570 | 1,596 |
-| plugin on #1 | 123.0s | 8 (+1 delegated child) | 16,481 | 14,971 |
-| plugin on #2 | 29.0s | 8 | 16,253 | 3,376 |
-| plugin on #3 | 35.1s | 8 | 16,255 | 4,725 |
-| plugin on #4 | 52.2s | 4 (+1 delegated child) | 3,529 | 2,435 |
+| Task (runs: off / on) | Plugin off | Plugin on |
+| --- | --- | --- |
+| Research three things (3 / 4) | 15s median, 12-16s range; 5 tool calls; in ~13k, out 0.9-1.6k | 44s median, 29-123s range; 6 tool calls; in ~16k, out 3.4-15k; delegation ran in 2 of 4 |
+| Create sorter.py, run it, show output (1 / 1) | 12s; 2 tool calls | 18s; 3 tool calls |
+| Reply with exactly: `ping` (1 / 1) | 4s; 0 tool calls | 6s; 0 tool calls |
 
-Wall clock, plugin off: median 15s. Plugin on: median 44s — but most of that gap is the plan
-*changing the work*, not the plugin's own latency: the two slow runs are the ones where the
-enforced lane pushed the turn into `delegate_task`. The plugin's own cost per turn, measured from
-the flow log:
+The research gap is mostly the plan *changing the work*, not plugin latency — the slow runs are the
+ones where the enforced lane pushed the turn into `delegate_task`. The plugin's own cost per turn,
+measured from the flow log:
 
 | Cost | Value |
 | --- | --- |
