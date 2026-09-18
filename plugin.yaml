@@ -24,3 +24,4 @@ config_schema:
   economy_model: {type: str, default: "", description: Model id to use when Jev pitches the economy tier; empty disables the swap}
   standard_model: {type: str, default: "", description: Model id to use when Jev pitches the standard tier; empty disables the swap}
   frontier_model: {type: str, default: "", description: Model id to use when Jev pitches the frontier tier; empty disables the swap}
+  risk_tools: {type: str, default: "", description: Pipe-separated tools that get a Jev risk score; empty scores every tool}

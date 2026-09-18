@@ -43,7 +43,7 @@ LOG_PATH = os.environ.get("JEV_LOG") or str(
     / "plugin-data" / "hermes-jev-guard" / "jev-flow.jsonl")
 
 _SETTING_NAMES = ("timeout", "approve_at", "block_at", "verify_at", "max_state_chars",
-                  "log_path", "economy_model", "standard_model", "frontier_model")
+                  "log_path", "economy_model", "standard_model", "frontier_model", "risk_tools")
 
 
 def configure(**overrides) -> None:
@@ -92,7 +92,9 @@ LANE_DIRECTIVES = {
     "review_pass": "Before you stop, run one separate verification pass over the result.",
 }
 
-# Tools the human gate escalates after Jev flags a turn (see on_pre_verify).
+# Tools that get a Jev risk score. Empty = every tool is scored. A pipe- or
+# comma-separated list keeps the scoring cost on actions that can change state.
+RISK_TOOLS = os.environ.get("JEV_RISK_TOOLS", "")
 GATE_TOOLS = ("write_file", "patch", "delegate_task")
 
 # Per-session plan state; the hooks fire in-process, so a plain dict is enough.
@@ -110,6 +112,13 @@ def _remember(session: str, **fields) -> None:
 
 def _plan(session: str) -> dict:
     return _STATE.get(session) or {}
+
+
+def _risk_scored(tool: str) -> bool:
+    """Is this tool in risk_tools? Empty list scores everything."""
+    if not RISK_TOOLS:
+        return True
+    return tool in {name.strip() for name in re.split(r"[|,]", RISK_TOOLS) if name.strip()}
 
 
 def api_key() -> str:
@@ -264,6 +273,9 @@ def on_pre_tool_call(payload: dict, ask=ask) -> dict:
                 "message": f"Jev flagged this turn's result for the user: {tool} may only run "
                            "with your approval."}
 
+    if not _risk_scored(tool):
+        return {}  # tool outside risk_tools: no Jev call, nothing to decide
+
     state = {"tool": tool,
              "input": payload.get("tool_input") or payload.get("args") or {},
              "cwd": payload.get("cwd") or ""}
@@ -389,7 +401,7 @@ def plan_for(text: str, ask=ask) -> str:
 
 def self_test() -> int:
     configure(approve_at=0.7, block_at=0.97, verify_at=0.7,
-              economy_model="", standard_model="", frontier_model="")  # deterministic
+              economy_model="", standard_model="", frontier_model="", risk_tools="")  # deterministic
     _STATE.clear()
 
     hint = on_pre_llm_call({"session_id": "s0", "extra": {"user_message": "design a queue"}},
@@ -415,6 +427,17 @@ def self_test() -> int:
     assert on_pre_tool_call(tool_payload, ask=_scripted_ask(risk=0.1)) == {}
     assert on_pre_tool_call(tool_payload, ask=_scripted_ask(risk=0.8))["action"] == "approve"
     assert on_pre_tool_call(tool_payload, ask=_scripted_ask(risk=0.99))["action"] == "block"
+
+    # risk_tools scoping: unscored tools never reach Jev
+    def _no_ask(*_a, **_k):
+        raise AssertionError("Jev must not be called for an unscored tool")
+
+    configure(risk_tools="write_file|patch|terminal")
+    assert on_pre_tool_call({"session_id": "s3", "tool_name": "read_file"}, ask=_no_ask) == {}
+    assert on_pre_tool_call(tool_payload, ask=_scripted_ask(risk=0.8))["action"] == "approve"
+    configure(risk_tools="")
+    assert on_pre_tool_call({"session_id": "s3", "tool_name": "read_file"},
+                            ask=_scripted_ask(risk=0.8))["action"] == "approve"
 
     # done-check: complete / verify_more / ask_human
     verify_payload = {"session_id": "s4", "extra": {"final_response": "Done. All tests pass.",

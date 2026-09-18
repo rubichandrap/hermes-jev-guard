@@ -61,6 +61,7 @@ environment variables are the fallback defaults.
 | `economy_model` | `JEV_ECONOMY_MODEL` | `""` | model id for the economy tier; empty disables the swap |
 | `standard_model` | `JEV_STANDARD_MODEL` | `""` | model id for the standard tier |
 | `frontier_model` | `JEV_FRONTIER_MODEL` | `""` | model id for the frontier tier |
+| `risk_tools` | `JEV_RISK_TOOLS` | `""` | pipe-separated tools that get a risk score; empty scores every tool |
 
 If Jev errors or times out, the hooks fail open: the agent proceeds and a warning is logged.
 
