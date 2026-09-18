@@ -43,7 +43,8 @@ LOG_PATH = os.environ.get("JEV_LOG") or str(
     / "plugin-data" / "hermes-jev-guard" / "jev-flow.jsonl")
 
 _SETTING_NAMES = ("timeout", "approve_at", "block_at", "verify_at", "max_state_chars",
-                  "log_path", "economy_model", "standard_model", "frontier_model", "risk_tools")
+                  "log_path", "economy_model", "standard_model", "frontier_model", "risk_tools",
+                  "force_lane")
 
 
 def configure(**overrides) -> None:
@@ -97,6 +98,11 @@ LANE_DIRECTIVES = {
 RISK_TOOLS = os.environ.get("JEV_RISK_TOOLS", "")
 GATE_TOOLS = ("write_file", "patch", "delegate_task")
 
+# When a delegating lane is confident (>= this probability), the first do-it-yourself
+# tool call is blocked once with a nudge to delegate instead. Empty = advisory only.
+FORCE_LANE = os.environ.get("JEV_FORCE_LANE", "")
+FORCE_LANE_TOOLS = ("web_search", "web_extract", "browser_exec", "read_file")
+
 # Per-session plan state; the hooks fire in-process, so a plain dict is enough.
 # ponytail: capped, oldest dropped; a gateway running for weeks would otherwise leak.
 _STATE: dict[str, dict] = {}
@@ -119,6 +125,14 @@ def _risk_scored(tool: str) -> bool:
     if not RISK_TOOLS:
         return True
     return tool in {name.strip() for name in re.split(r"[|,]", RISK_TOOLS) if name.strip()}
+
+
+def _force_lane_at() -> float | None:
+    """Threshold at which a delegating lane blocks the first direct tool call, or None."""
+    try:
+        return float(FORCE_LANE) if str(FORCE_LANE).strip() else None
+    except ValueError:
+        return None
 
 
 def api_key() -> str:
@@ -244,7 +258,8 @@ def on_pre_llm_call(payload: dict, ask=ask) -> dict:
     score = (answers.get("complexity") or {}).get("score")
     if lane not in LANES or tier not in TIERS:
         return {}
-    _remember(_session(payload), lane=lane, tier=tier, user_message=message)
+    _remember(_session(payload), lane=lane, tier=tier, lane_p=lane_p, user_message=message,
+              lane_forced=False)
 
     lines = [
         _label(f"Jev plan: lane={lane}", LANES, lane, lane_p),
@@ -272,6 +287,16 @@ def on_pre_tool_call(payload: dict, ask=ask) -> dict:
         return {"action": "approve",
                 "message": f"Jev flagged this turn's result for the user: {tool} may only run "
                            "with your approval."}
+
+    force_at = _force_lane_at()
+    if (force_at is not None and not plan.get("lane_forced")
+            and plan.get("lane") in ("parallel_read", "worktree_code")
+            and (plan.get("lane_p") or 0) >= force_at and tool in FORCE_LANE_TOOLS):
+        _remember(session, lane_forced=True)  # one-shot: the next direct call goes through
+        return {"action": "block",
+                "message": f"Jev plan: lane={plan['lane']} (p={plan['lane_p']:.2f}) hands this "
+                           "work to subagents. Call delegate_task with self-contained goals, or "
+                           "say why the plan is wrong. This block fires once."}
 
     if not _risk_scored(tool):
         return {}  # tool outside risk_tools: no Jev call, nothing to decide
@@ -401,7 +426,8 @@ def plan_for(text: str, ask=ask) -> str:
 
 def self_test() -> int:
     configure(approve_at=0.7, block_at=0.97, verify_at=0.7,
-              economy_model="", standard_model="", frontier_model="", risk_tools="")  # deterministic
+              economy_model="", standard_model="", frontier_model="", risk_tools="",
+              force_lane="")  # deterministic
     _STATE.clear()
 
     hint = on_pre_llm_call({"session_id": "s0", "extra": {"user_message": "design a queue"}},
@@ -438,6 +464,20 @@ def self_test() -> int:
     configure(risk_tools="")
     assert on_pre_tool_call({"session_id": "s3", "tool_name": "read_file"},
                             ask=_scripted_ask(risk=0.8))["action"] == "approve"
+
+    # force_lane: a confident delegating lane blocks the first direct tool call, once
+    configure(force_lane="0.9")
+    on_pre_llm_call({"session_id": "s5", "extra": {"user_message": "research three things"}},
+                    ask=_scripted_ask(lane="parallel_read"))
+    _STATE["s5"]["lane_p"] = 0.92
+    forced = on_pre_tool_call({"session_id": "s5", "tool_name": "web_search"}, ask=_no_ask)
+    assert forced["action"] == "block" and "delegate_task" in forced["message"], forced
+    assert on_pre_tool_call({"session_id": "s5", "tool_name": "web_search"}, ask=_scripted_ask()) == {}
+    on_pre_llm_call({"session_id": "s6", "extra": {"user_message": "research three things"}},
+                    ask=_scripted_ask(lane="parallel_read"))
+    _STATE["s6"]["lane_p"] = 0.5  # below threshold: advisory only
+    assert on_pre_tool_call({"session_id": "s6", "tool_name": "web_search"}, ask=_scripted_ask()) == {}
+    configure(force_lane="")
 
     # done-check: complete / verify_more / ask_human
     verify_payload = {"session_id": "s4", "extra": {"final_response": "Done. All tests pass.",

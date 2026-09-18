@@ -58,6 +58,7 @@ def register(ctx):
         standard_model=ctx.get_config("standard_model", default=jev_guard.STANDARD_MODEL),
         frontier_model=ctx.get_config("frontier_model", default=jev_guard.FRONTIER_MODEL),
         risk_tools=ctx.get_config("risk_tools", default=jev_guard.RISK_TOOLS),
+        force_lane=ctx.get_config("force_lane", default=jev_guard.FORCE_LANE),
     )
     for event in _EVENTS:
         ctx.register_hook(event, _make_hook(event))

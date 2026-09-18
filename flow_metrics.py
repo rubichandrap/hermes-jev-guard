@@ -151,6 +151,9 @@ def db_effectiveness(log_rows: list[dict], db_path: str) -> dict | None:
         blocked = con.execute(
             "select count(*) from messages where session_id=? and content like '%lane=none (no subagent)%'",
             (sid,)).fetchone()[0]
+        forced = con.execute(
+            "select count(*) from messages where session_id=? and content like '%hands this work to subagents%'",
+            (sid,)).fetchone()[0]
         delegated = "delegate_task" in tools
         if lane == "none":
             hits["enforce_sessions"] += 1
@@ -158,7 +161,9 @@ def db_effectiveness(log_rows: list[dict], db_path: str) -> dict | None:
         elif lane in ("parallel_read", "worktree_code", "review_pass"):
             hits["soft_sessions"] += 1
             hits["soft"] += 1 if delegated else 0
-        hits["sessions"][sid] = {"lane": lane, "delegated": delegated, "blocked": bool(blocked)}
+        hits["forced"] = hits.get("forced", 0) + (1 if forced else 0)
+        hits["sessions"][sid] = {"lane": lane, "delegated": delegated, "blocked": bool(blocked),
+                                 "forced": bool(forced)}
     con.close()
     return hits
 
@@ -197,6 +202,8 @@ def report(path: str, db_path: str | None = None) -> int:
                   "saw a delegation attempt or a block")
             print(f"  soft hint    {hits['soft']}/{hits['soft_sessions']} delegating-lane sessions "
                   "actually delegated")
+            print(f"  forced lane  {hits.get('forced', 0)} turn(s) where a delegating lane blocked "
+                  "the first direct tool call")
     return 0
 
 
