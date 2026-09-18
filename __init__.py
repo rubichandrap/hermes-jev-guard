@@ -43,7 +43,12 @@ def _make_hook(event: str):
 
 def register(ctx):
     """Resolve settings, then register the three hooks."""
+    try:  # profile-scoped flow log; older loaders without ctx.state keep the default path
+        log_path = str(ctx.state.data_dir / "jev-flow.jsonl")
+    except AttributeError:
+        log_path = jev_guard.LOG_PATH
     jev_guard.configure(
+        log_path=log_path,
         timeout=ctx.get_config("timeout", default=jev_guard.TIMEOUT),
         approve_at=ctx.get_config("approve_at", default=jev_guard.APPROVE_AT),
         block_at=ctx.get_config("block_at", default=jev_guard.BLOCK_AT),

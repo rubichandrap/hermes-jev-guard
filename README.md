@@ -39,6 +39,12 @@ environment variables are the fallback defaults.
 
 If Jev errors or times out, the hooks fail open: the agent proceeds and a warning is logged.
 
+## Flow log
+
+Every Jev call appends one JSONL line to
+`$HERMES_HOME/plugin-data/hermes-jev-guard/jev-flow.jsonl` (`JEV_LOG` overrides the path):
+event, latency, state preview, Jev's answers, thresholds, error.
+
 ## Shell-hook mode (alternative, no plugin)
 
 `jev_guard.py` also runs standalone. Append the block from

@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -28,7 +29,13 @@ BLOCK_AT = float(os.environ.get("JEV_BLOCK_AT", "0.97"))
 VERIFY_AT = float(os.environ.get("JEV_VERIFY_AT", "0.7"))
 MAX_STATE_CHARS = int(os.environ.get("JEV_MAX_STATE_CHARS", "12000"))
 
-_SETTING_NAMES = ("timeout", "approve_at", "block_at", "verify_at", "max_state_chars")
+# One JSONL line per Jev call, read by jev_flow_tui.py. Plugin mode overrides this
+# with ctx.state.data_dir; env JEV_LOG wins for both modes.
+LOG_PATH = os.environ.get("JEV_LOG") or str(
+    Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    / "plugin-data" / "hermes-jev-guard" / "jev-flow.jsonl")
+
+_SETTING_NAMES = ("timeout", "approve_at", "block_at", "verify_at", "max_state_chars", "log_path")
 
 
 def configure(**overrides) -> None:
@@ -68,13 +75,43 @@ def api_key() -> str:
     raise RuntimeError("TYPESAFE_API_KEY not found in the environment or $HERMES_HOME/.env")
 
 
-def ask(state, questions: dict) -> dict:
+def log_call(event: str, ms: float, ok: bool, state=None, answers=None, error=None) -> None:
+    """Append one JSONL record to LOG_PATH. Never raises: the hook must not wedge.
+
+    ponytail: plain append, no rotation - one line per Jev call; rotate when the file
+    grows enough to matter.
+    """
+    try:
+        path = Path(LOG_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": time.time(), "event": event, "ms": round(ms, 1), "ok": ok,
+            "state_chars": len(state or ""), "state_head": (state or "")[:200],
+            "answers": answers, "error": error,
+            "thresholds": {"approve_at": APPROVE_AT, "block_at": BLOCK_AT, "verify_at": VERIFY_AT},
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def ask(state, questions: dict, event: str = "") -> dict:
+    """POST one question set to Jev; log the call whether it succeeds or fails."""
     body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode("utf-8")
     req = urllib.request.Request(
         API_URL, data=body,
         headers={"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))["answers"]
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            answers = json.loads(resp.read().decode("utf-8"))["answers"]
+    except Exception as exc:
+        log_call(event, (time.monotonic() - started) * 1000, False, state,
+                 error=f"{type(exc).__name__}: {exc}")
+        raise
+    log_call(event, (time.monotonic() - started) * 1000, True, state, answers=answers)
+    return answers
 
 
 def clip(obj, limit: int | None = None) -> str:
@@ -105,7 +142,7 @@ def on_pre_llm_call(payload: dict, ask=ask) -> dict:
             "criteria": ["trivial; one fact", "moderate; some design thought",
                          "deep; multi-step reasoning"],
         },
-    })
+    }, "pre_llm_call")
     route = answers["route"]
     chosen = route.get("choice", "")
     p = (route.get("probabilities") or {}).get(chosen)
@@ -129,7 +166,7 @@ def on_pre_tool_call(payload: dict, ask=ask) -> dict:
                 "false": "read-only, additive, or easily reversible",
             },
         },
-    })["risk"]["noul"]
+    }, "pre_tool_call")["risk"]["noul"]
     if risk >= BLOCK_AT:
         return {"action": "block",
                 "message": f"Jev risk {risk:.2f}: blocked; rewrite as a safer, reversible step."}
@@ -158,7 +195,7 @@ def on_pre_verify(payload: dict, ask=ask) -> dict:
                 "false": "claims match the evidence shown; work looks complete",
             },
         },
-    })["unfinished"]["noul"]
+    }, "pre_verify")["unfinished"]["noul"]
     if p >= VERIFY_AT:
         return {"action": "continue",
                 "message": f"Jev done-check flagged this (p={p:.2f}). Show real evidence for "
@@ -180,7 +217,7 @@ def handle(payload: dict) -> dict:
 
 def _scripted_ask(route="deep_reasoning", complexity=1.5, risk=0.0, unfinished=0.0):
     """Deterministic stand-in for ask() so the decision logic is testable offline."""
-    def fake(state, questions, key=None):
+    def fake(state, questions, event=None):
         out = {}
         if "route" in questions:
             out["route"] = {"type": "choice", "choice": route,
@@ -215,6 +252,17 @@ def self_test() -> int:
     assert on_pre_verify(verify_payload, ask=_scripted_ask(unfinished=0.1)) == {}
 
     assert handle({"hook_event_name": "unknown_event"}) == {}
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        configure(log_path=str(Path(tmp) / "flow.jsonl"))
+        log_call("self_test", 1.5, True, "state", {"a": 1})
+        log_call("self_test", 2.5, False, error="boom")
+        rows = [json.loads(x) for x in
+                (Path(tmp) / "flow.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert rows[0]["event"] == "self_test" and rows[0]["ok"] is True and rows[0]["ms"] == 1.5
+        assert rows[1]["ok"] is False and "boom" in rows[1]["error"]
+
     print("self-test OK")
     return 0
 
